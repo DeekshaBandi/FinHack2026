@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import PortfolioDashboard from "@/components/PortfolioDashboard";
-import ContagionNetworkTab from "@/components/ContagionNetwork";
+import { ContagionNetwork } from "@/components/ContagionNetwork";
 import ClimateRiskHeatmap from "@/components/ClimateRiskHeatmap";
 import CorporateStressTester from "@/components/CorporateStressTester";
 import RagAdvisorTab from "@/components/RagAdvisorTab";
@@ -108,8 +108,8 @@ function Dashboard({ platformName }: DashboardProps) {
           <PortfolioDashboard />
         </main>
       ) : activeTab === "contagion" ? (
-        <main className="flex-1 min-h-0">
-          <ContagionNetworkTab />
+        <main className="flex-1 min-h-0 animate-in">
+          <ContagionNetwork />
         </main>
       ) : activeTab === "heatmap" ? (
         <main className="flex-1 min-h-0">
@@ -132,7 +132,6 @@ function Dashboard({ platformName }: DashboardProps) {
                        p-10 md:p-16 text-center
                        animate-in"
           >
-            {/* Coming Soon badge */}
             <span className="absolute top-5 right-5 px-2.5 py-1 rounded-full
                              text-[10px] font-semibold uppercase tracking-widest
                              bg-white/[0.06] text-white/30 border border-white/[0.06]">
