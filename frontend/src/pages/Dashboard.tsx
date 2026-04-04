@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import PortfolioDashboard from "@/components/PortfolioDashboard";
 import { ContagionNetwork } from "@/components/ContagionNetwork";
-import ClimateRiskHeatmap from "@/components/ClimateRiskHeatmap";
+import { ClimateRiskHeatmap } from "@/components/ClimateRiskHeatmap";
 import CorporateStressTester from "@/components/CorporateStressTester";
 import RagAdvisorTab from "@/components/RagAdvisorTab";
 

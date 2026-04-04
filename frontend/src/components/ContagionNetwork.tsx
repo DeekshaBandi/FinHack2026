@@ -1,7 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import * as d3 from "d3";
 import * as topojson from "topojson-client";
-// @ts-expect-error us-atlas has no type declarations
 import usAtlas from "us-atlas/states-10m.json";
 import type { ContagionNode, ContagionEdge, ContagionResponse, ContagionTimelineStep } from "@/lib/types";
 import { useApi } from "@/hooks/useApi";
@@ -183,7 +182,7 @@ export function ContagionNetwork() {
 
     // ── US Map Background ───────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const states = topojson.feature(usAtlas as any, (usAtlas as any).objects.states) as GeoJSON.FeatureCollection;
+    const states = topojson.feature(usAtlas as any, (usAtlas as any).objects.states) as unknown as GeoJSON.FeatureCollection;
     g.append("g").attr("class", "us-map")
       .selectAll("path")
       .data(states.features)

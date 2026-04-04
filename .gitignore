@@ -11,5 +11,8 @@ dist/
 # ChromaDB
 backend/app/rag/chroma_db/
 
+# Optional local caches under backend data dir
+backend/app/data/cache/
+
 # OS
 .DS_Store
