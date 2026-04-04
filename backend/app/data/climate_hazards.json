@@ -1,0 +1,20 @@
+[
+  {"hazard_type":"hurricane","region":"gulf_coast","probability":0.82,"severity_range":[3,5],"lat":28.5,"lng":-90.0,"radius_km":400,"description":"Peak season Jun-Nov, major hurricane landfall probability"},
+  {"hazard_type":"hurricane","region":"southeast","probability":0.65,"severity_range":[2,4],"lat":30.5,"lng":-82.0,"radius_km":350,"description":"Atlantic hurricane corridor, frequent tropical storms"},
+  {"hazard_type":"hurricane","region":"northeast","probability":0.35,"severity_range":[1,3],"lat":40.0,"lng":-74.0,"radius_km":250,"description":"Rare but devastating nor'easters and post-tropical systems"},
+  {"hazard_type":"wildfire","region":"california","probability":0.78,"severity_range":[3,5],"lat":37.0,"lng":-120.0,"radius_km":500,"description":"Year-round fire season, utility-caused ignitions, WUI expansion"},
+  {"hazard_type":"wildfire","region":"mountain_west","probability":0.55,"severity_range":[2,4],"lat":39.5,"lng":-106.0,"radius_km":400,"description":"Increasing fire frequency from drought and beetle kill"},
+  {"hazard_type":"wildfire","region":"pacific_northwest","probability":0.42,"severity_range":[2,3],"lat":45.5,"lng":-122.0,"radius_km":300,"description":"Smoke events and forest fires increasing in frequency"},
+  {"hazard_type":"wildfire","region":"southwest","probability":0.60,"severity_range":[2,4],"lat":34.0,"lng":-111.0,"radius_km":350,"description":"Desert and chaparral fires, extreme heat driven"},
+  {"hazard_type":"flood","region":"gulf_coast","probability":0.75,"severity_range":[2,5],"lat":29.5,"lng":-95.0,"radius_km":300,"description":"Storm surge, riverine flooding, inadequate drainage"},
+  {"hazard_type":"flood","region":"midwest","probability":0.55,"severity_range":[2,4],"lat":40.0,"lng":-90.0,"radius_km":400,"description":"Mississippi/Missouri river systems, spring flooding"},
+  {"hazard_type":"flood","region":"northeast","probability":0.45,"severity_range":[1,3],"lat":41.0,"lng":-74.0,"radius_km":250,"description":"Coastal and urban flooding from atmospheric rivers"},
+  {"hazard_type":"flood","region":"southeast","probability":0.60,"severity_range":[2,4],"lat":33.0,"lng":-84.0,"radius_km":300,"description":"Tropical rain events and river basin flooding"},
+  {"hazard_type":"drought","region":"midwest","probability":0.48,"severity_range":[2,5],"lat":41.0,"lng":-93.0,"radius_km":600,"description":"Agricultural drought devastating crop yields"},
+  {"hazard_type":"drought","region":"southwest","probability":0.72,"severity_range":[3,5],"lat":34.0,"lng":-112.0,"radius_km":500,"description":"Mega-drought conditions, water scarcity crisis"},
+  {"hazard_type":"drought","region":"california","probability":0.62,"severity_range":[2,4],"lat":36.0,"lng":-119.0,"radius_km":450,"description":"Multi-year drought cycles, groundwater depletion"},
+  {"hazard_type":"drought","region":"gulf_coast","probability":0.38,"severity_range":[1,3],"lat":31.0,"lng":-97.0,"radius_km":350,"description":"Flash drought events, extreme heat amplification"},
+  {"hazard_type":"sea_level_rise","region":"southeast","probability":0.70,"severity_range":[2,4],"lat":26.0,"lng":-80.0,"radius_km":300,"description":"South Florida especially vulnerable, king tides"},
+  {"hazard_type":"sea_level_rise","region":"gulf_coast","probability":0.68,"severity_range":[2,4],"lat":29.0,"lng":-90.0,"radius_km":350,"description":"Subsidence amplifies sea level rise, coastal erosion"},
+  {"hazard_type":"sea_level_rise","region":"northeast","probability":0.52,"severity_range":[1,3],"lat":40.5,"lng":-74.0,"radius_km":200,"description":"NYC and Boston harbor vulnerability, storm surge amplification"}
+]

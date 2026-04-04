@@ -1,0 +1,603 @@
+import { useRef, useEffect, useState, useCallback } from "react";
+import * as d3 from "d3";
+import * as topojson from "topojson-client";
+// @ts-expect-error us-atlas has no type declarations
+import usAtlas from "us-atlas/states-10m.json";
+import type { ContagionNode, ContagionEdge, ContagionResponse, ContagionTimelineStep } from "@/lib/types";
+import { useApi } from "@/hooks/useApi";
+
+const SECTOR_COLORS: Record<string, string> = {
+  Energy: "#ef4444", Financials: "#60a5fa", Technology: "#a78bfa",
+  Utilities: "#fbbf24", "Real Estate": "#34d399", Healthcare: "#f472b6",
+  Materials: "#fb923c", Industrials: "#818cf8",
+  "Consumer Discretionary": "#2dd4bf", "Consumer Staples": "#a3e635",
+};
+const RISK_COLORS: Record<string, string> = {
+  low: "#22c55e", medium: "#eab308", high: "#f97316", critical: "#ef4444",
+};
+
+const DECAY_FACTOR = 0.6;
+const CONTAGION_THRESHOLD = 0.05;
+const STEP_DELAY = 700;
+
+const EVENT_TYPES = [
+  { value: "hurricane", label: "Hurricane", icon: "\u{1F300}" },
+  { value: "wildfire", label: "Wildfire", icon: "\u{1F525}" },
+  { value: "drought", label: "Drought", icon: "\u2600\uFE0F" },
+  { value: "flood", label: "Flood", icon: "\u{1F30A}" },
+  { value: "compound", label: "Compound", icon: "\u26A1" },
+];
+
+const PRESETS = [
+  { label: "Hurricane \u2014 Gulf Coast", tag: "CAT-5", epicenters: ["XOM", "CVX", "VLO"], event: "hurricane", severity: 5 },
+  { label: "Wildfire \u2014 California", tag: "MEGA", epicenters: ["AAPL", "GOOGL", "ENPH"], event: "wildfire", severity: 4 },
+  { label: "Drought \u2014 Midwest", tag: "SEV-4", epicenters: ["ADM", "TSN", "DE"], event: "drought", severity: 4 },
+  { label: "Compound \u2014 Texas Grid", tag: "CAT-5", epicenters: ["XOM", "NEE", "TSLA"], event: "compound", severity: 5 },
+];
+
+/* ── Client-side BFS propagation ─────────────────────────────── */
+
+function clientPropagate(
+  edges: ContagionEdge[],
+  epicenters: string[],
+  severity: number,
+): { timeline: ContagionTimelineStep[]; impacts: Map<string, number>; totalRisk: number } {
+  const adj = new Map<string, Array<{ neighbor: string; weight: number }>>();
+  for (const e of edges) {
+    const s = typeof e.source === "string" ? e.source : e.source.id;
+    const t = typeof e.target === "string" ? e.target : e.target.id;
+    if (!adj.has(s)) adj.set(s, []);
+    if (!adj.has(t)) adj.set(t, []);
+    adj.get(s)!.push({ neighbor: t, weight: e.weight });
+    adj.get(t)!.push({ neighbor: s, weight: e.weight });
+  }
+  const sevMult = severity / 5;
+  let queue = epicenters.map((t) => ({ ticker: t, impact: sevMult * 0.85 }));
+  const visited = new Map<string, number>();
+  const timeline: ContagionTimelineStep[] = [];
+  let step = 0;
+  while (queue.length > 0) {
+    const next: typeof queue = [];
+    const stepNodes: Array<{ ticker: string; impact: number }> = [];
+    for (const { ticker, impact } of queue) {
+      if (visited.has(ticker)) continue;
+      visited.set(ticker, impact);
+      stepNodes.push({ ticker, impact: Math.round(impact * 1000) / 1000 });
+      for (const { neighbor, weight } of adj.get(ticker) ?? []) {
+        const prop = impact * weight * DECAY_FACTOR;
+        if (prop > CONTAGION_THRESHOLD && !visited.has(neighbor)) {
+          next.push({ ticker: neighbor, impact: prop });
+        }
+      }
+    }
+    if (stepNodes.length) timeline.push({ step, nodes: stepNodes });
+    queue = next;
+    step++;
+  }
+  let totalRisk = 0;
+  for (const [t, v] of visited) {
+    if (!epicenters.includes(t)) totalRisk += v;
+  }
+  return { timeline, impacts: visited, totalRisk };
+}
+
+/* ── Component ───────────────────────────────────────────────── */
+
+export function ContagionNetwork() {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const animTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const [tooltip, setTooltip] = useState<{ node: ContagionNode; x: number; y: number } | null>(null);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [activeStep, setActiveStep] = useState(0);
+  const [totalSteps, setTotalSteps] = useState(0);
+  const [totalRisk, setTotalRisk] = useState(0);
+  const [networkData, setNetworkData] = useState<ContagionResponse | null>(null);
+  const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
+  const [customEvent, setCustomEvent] = useState("hurricane");
+  const [customSeverity, setCustomSeverity] = useState(4);
+  const [impactMap, setImpactMap] = useState<Map<string, number>>(new Map());
+
+  const networkApi = useApi<ContagionResponse>();
+
+  useEffect(() => {
+    networkApi.get("/contagion/network").then((d) => { if (d) setNetworkData(d); });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── D3 render ─────────────────────────────────────────────── */
+  useEffect(() => {
+    if (!networkData || !svgRef.current || !containerRef.current) return;
+    const container = containerRef.current;
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+
+    const projection = d3.geoAlbersUsa().scale(1300).translate([width / 2, height / 2]);
+    const pathGen = d3.geoPath(projection);
+
+    const svg = d3.select(svgRef.current);
+    svg.selectAll("*").remove();
+    svg.attr("viewBox", `0 0 ${width} ${height}`);
+
+    // ── Defs ────────────────────────────────────────────────────
+    const defs = svg.append("defs");
+
+    // Node glow
+    const glowF = defs.append("filter").attr("id", "glow").attr("x", "-50%").attr("y", "-50%").attr("width", "200%").attr("height", "200%");
+    glowF.append("feGaussianBlur").attr("stdDeviation", "6").attr("result", "b");
+    const gm = glowF.append("feMerge");
+    gm.append("feMergeNode").attr("in", "b");
+    gm.append("feMergeNode").attr("in", "SourceGraphic");
+
+    // Edge glow
+    const edgeF = defs.append("filter").attr("id", "edge-glow").attr("x", "-20%").attr("y", "-20%").attr("width", "140%").attr("height", "140%");
+    edgeF.append("feGaussianBlur").attr("stdDeviation", "3").attr("result", "b");
+    const em = edgeF.append("feMerge");
+    em.append("feMergeNode").attr("in", "b");
+    em.append("feMergeNode").attr("in", "SourceGraphic");
+
+    // Radial gradient for map fill
+    const mapGrad = defs.append("radialGradient").attr("id", "map-fill").attr("cx", "50%").attr("cy", "50%").attr("r", "60%");
+    mapGrad.append("stop").attr("offset", "0%").attr("stop-color", "rgba(255,255,255,0.08)");
+    mapGrad.append("stop").attr("offset", "100%").attr("stop-color", "rgba(255,255,255,0.02)");
+
+    const g = svg.append("g");
+
+    // Zoom
+    svg.call(
+      d3.zoom<SVGSVGElement, unknown>()
+        .scaleExtent([0.4, 5])
+        .on("zoom", (e: d3.D3ZoomEvent<SVGSVGElement, unknown>) => g.attr("transform", e.transform.toString()))
+    );
+
+    // ── US Map Background ───────────────────────────────────────
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const states = topojson.feature(usAtlas as any, (usAtlas as any).objects.states) as GeoJSON.FeatureCollection;
+    g.append("g").attr("class", "us-map")
+      .selectAll("path")
+      .data(states.features)
+      .join("path")
+      .attr("d", pathGen as unknown as string)
+      .attr("fill", "url(#map-fill)")
+      .attr("stroke", "rgba(255,255,255,0.15)")
+      .attr("stroke-width", 0.6)
+      .attr("stroke-linejoin", "round");
+
+    // Outer nation border (thicker)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const nationMesh = topojson.mesh(usAtlas as any, (usAtlas as any).objects.states, (a: any, b: any) => a === b);
+    g.append("path")
+      .datum(nationMesh)
+      .attr("d", pathGen as unknown as string)
+      .attr("fill", "none")
+      .attr("stroke", "rgba(255,255,255,0.25)")
+      .attr("stroke-width", 1.2)
+      .attr("stroke-linejoin", "round");
+
+    // Inner state borders (subtle)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stateMesh = topojson.mesh(usAtlas as any, (usAtlas as any).objects.states, (a: any, b: any) => a !== b);
+    g.append("path")
+      .datum(stateMesh)
+      .attr("d", pathGen as unknown as string)
+      .attr("fill", "none")
+      .attr("stroke", "rgba(255,255,255,0.08)")
+      .attr("stroke-width", 0.4);
+
+    // ── Project nodes ───────────────────────────────────────────
+    interface PNode { id: string; px: number; py: number }
+    const nodePos = new Map<string, PNode>();
+    for (const n of networkData.nodes) {
+      const c = projection([n.hq_lng, n.hq_lat]);
+      nodePos.set(n.id, { id: n.id, px: c ? c[0] : width / 2, py: c ? c[1] : height / 2 });
+    }
+
+    // ── Edges ───────────────────────────────────────────────────
+    const edgeG = g.append("g");
+    edgeG.selectAll("line")
+      .data(networkData.edges)
+      .join("line")
+      .each(function (d: ContagionEdge) {
+        const s = typeof d.source === "string" ? d.source : d.source.id;
+        const t = typeof d.target === "string" ? d.target : d.target.id;
+        const sp = nodePos.get(s);
+        const tp = nodePos.get(t);
+        const impS = impactMap.get(s) ?? 0;
+        const impT = impactMap.get(t) ?? 0;
+        const active = impS > 0 && impT > 0;
+        const color = active
+          ? (Math.max(impS, impT) > 0.3 ? "#ef4444" : Math.max(impS, impT) > 0.15 ? "#f97316" : "#eab308")
+          : "rgba(255,255,255,0.04)";
+        d3.select(this)
+          .attr("x1", sp?.px ?? 0).attr("y1", sp?.py ?? 0)
+          .attr("x2", tp?.px ?? 0).attr("y2", tp?.py ?? 0)
+          .attr("stroke", color)
+          .attr("stroke-width", active ? 2.5 : Math.max(d.weight * 1.2, 0.2))
+          .attr("stroke-opacity", active ? 0.85 : 0.12)
+          .attr("filter", active ? "url(#edge-glow)" : "none");
+      })
+      .attr("class", "edge-line");
+
+    // ── Nodes ───────────────────────────────────────────────────
+    const nodeG2 = g.append("g");
+    const nodeEls = nodeG2.selectAll<SVGGElement, ContagionNode>("g")
+      .data(networkData.nodes)
+      .join("g")
+      .attr("transform", (d: ContagionNode) => {
+        const p = nodePos.get(d.id);
+        return `translate(${p?.px ?? 0},${p?.py ?? 0})`;
+      })
+      .attr("cursor", "pointer")
+      .attr("class", "node-group");
+
+    // Outer pulse ring for high-impact nodes
+    nodeEls.filter((d: ContagionNode) => (impactMap.get(d.id) ?? 0) > 0.3)
+      .append("circle")
+      .attr("r", 22)
+      .attr("fill", "none")
+      .attr("stroke", (d: ContagionNode) => (impactMap.get(d.id) ?? 0) > 0.5 ? "#ef4444" : "#f97316")
+      .attr("stroke-width", 1)
+      .attr("opacity", 0.4)
+      .attr("class", "pulse-ring");
+
+    // Selection ring (dashed white)
+    nodeEls.append("circle")
+      .attr("r", 18)
+      .attr("fill", "none")
+      .attr("stroke", (d: ContagionNode) => selectedNodes.has(d.id) ? "#ffffff" : "none")
+      .attr("stroke-width", 2)
+      .attr("stroke-dasharray", "3 2")
+      .attr("opacity", 0.8);
+
+    // Background glow circle (larger, blurred)
+    nodeEls.filter((d: ContagionNode) => (impactMap.get(d.id) ?? 0) > 0.15)
+      .append("circle")
+      .attr("r", (d: ContagionNode) => {
+        const imp = impactMap.get(d.id) ?? 0;
+        return imp > 0.5 ? 28 : imp > 0.3 ? 22 : 18;
+      })
+      .attr("fill", (d: ContagionNode) => {
+        const imp = impactMap.get(d.id) ?? 0;
+        return imp > 0.5 ? "rgba(239,68,68,0.12)" : imp > 0.3 ? "rgba(249,115,22,0.10)" : "rgba(234,179,8,0.08)";
+      })
+      .attr("filter", "url(#glow)");
+
+    // Main node circle
+    nodeEls.append("circle")
+      .attr("r", (d: ContagionNode) => {
+        const imp = impactMap.get(d.id) ?? 0;
+        return imp > 0.5 ? 14 : imp > 0.2 ? 12 : imp > 0 ? 10 : 8;
+      })
+      .attr("fill", (d: ContagionNode) => {
+        const imp = impactMap.get(d.id) ?? 0;
+        if (imp > 0.5) return "rgba(239,68,68,0.35)";
+        if (imp > 0.2) return "rgba(249,115,22,0.30)";
+        if (imp > 0) return "rgba(234,179,8,0.25)";
+        return "rgba(255,255,255,0.05)";
+      })
+      .attr("stroke", (d: ContagionNode) => {
+        const imp = impactMap.get(d.id) ?? 0;
+        if (imp > 0.5) return "#ef4444";
+        if (imp > 0.2) return "#f97316";
+        if (imp > 0) return "#eab308";
+        return selectedNodes.has(d.id)
+          ? "#ffffff"
+          : (SECTOR_COLORS[d.sector] ?? "#555");
+      })
+      .attr("stroke-width", (d: ContagionNode) => {
+        const imp = impactMap.get(d.id) ?? 0;
+        return imp > 0 ? 2 : selectedNodes.has(d.id) ? 2 : 1.2;
+      })
+      .attr("class", "node-circle");
+
+    // Labels
+    nodeEls.append("text")
+      .text((d: ContagionNode) => d.id)
+      .attr("text-anchor", "middle").attr("dy", "0.35em")
+      .attr("font-size", "7px").attr("font-weight", "700")
+      .attr("fill", "white").attr("pointer-events", "none")
+      .attr("letter-spacing", "0.02em");
+
+    // Click to select
+    nodeEls.on("click", (_event: MouseEvent, d: ContagionNode) => {
+      if (isAnimating) return;
+      setSelectedNodes((prev) => {
+        const next = new Set(prev);
+        if (next.has(d.id)) next.delete(d.id); else next.add(d.id);
+        return next;
+      });
+    });
+
+    // Hover
+    nodeEls.on("mouseenter", function (event: MouseEvent, d: ContagionNode) {
+      d3.select(this).select(".node-circle")
+        .transition().duration(150)
+        .attr("stroke-width", 3);
+      const rect = container.getBoundingClientRect();
+      setTooltip({ node: d, x: event.clientX - rect.left, y: event.clientY - rect.top });
+    });
+    nodeEls.on("mouseleave", function () {
+      d3.select(this).select<SVGCircleElement>(".node-circle")
+        .transition().duration(150)
+        .attr("stroke-width", 1.5);
+      setTooltip(null);
+    });
+
+    return () => { svg.selectAll("*").remove(); };
+  }, [networkData, selectedNodes, impactMap, isAnimating]);
+
+  /* ── Run contagion (client-side) ───────────────────────────── */
+  const runContagion = useCallback((epicenters: string[], _eventType: string, severity: number) => {
+    if (!networkData || isAnimating) return;
+    animTimers.current.forEach(clearTimeout);
+    animTimers.current = [];
+    const { timeline, impacts, totalRisk: risk } = clientPropagate(networkData.edges, epicenters, severity);
+    setIsAnimating(true);
+    setTotalSteps(timeline.length);
+    setTotalRisk(risk);
+    setSelectedNodes(new Set());
+    const progressiveImpacts = new Map<string, number>();
+    timeline.forEach((step, idx) => {
+      const timer = setTimeout(() => {
+        setActiveStep(idx + 1);
+        for (const nd of step.nodes) progressiveImpacts.set(nd.ticker, nd.impact);
+        setImpactMap(new Map(progressiveImpacts));
+        if (idx === timeline.length - 1) setIsAnimating(false);
+      }, (idx + 1) * STEP_DELAY);
+      animTimers.current.push(timer);
+    });
+    if (timeline.length === 0) { setIsAnimating(false); setImpactMap(impacts); }
+  }, [networkData, isAnimating]);
+
+  const handleReset = useCallback(() => {
+    animTimers.current.forEach(clearTimeout);
+    animTimers.current = [];
+    setTotalRisk(0); setActiveStep(0); setTotalSteps(0);
+    setSelectedNodes(new Set()); setImpactMap(new Map()); setIsAnimating(false);
+  }, []);
+
+  const activeEventIcon = EVENT_TYPES.find((e) => e.value === customEvent)?.icon ?? "";
+
+  return (
+    <div ref={containerRef} className="relative w-full h-full min-h-[600px] overflow-hidden">
+      {/* ── Control Panel ──────────────────────────────────────── */}
+      <div className="absolute top-4 left-4 z-20 w-[260px] max-h-[calc(100vh-120px)] overflow-y-auto no-scrollbar
+                      rounded-2xl border border-white/[0.07] bg-[rgba(8,8,12,0.85)] backdrop-blur-2xl shadow-2xl">
+
+        {/* Header */}
+        <div className="px-5 pt-5 pb-3">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-1.5 h-1.5 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]" />
+            <h3 className="text-[11px] font-bold uppercase tracking-[0.15em] text-white/60">Climate Scenarios</h3>
+          </div>
+          <p className="text-[10px] text-white/25 leading-relaxed">Simulate cascade propagation through the supply chain network</p>
+        </div>
+
+        {/* Presets */}
+        <div className="px-4 pb-3 space-y-1.5">
+          {PRESETS.map((p) => (
+            <button key={p.label} disabled={isAnimating}
+              onClick={() => runContagion(p.epicenters, p.event, p.severity)}
+              className="group w-full text-left px-3 py-2.5 rounded-xl text-[11px] font-medium
+                bg-white/[0.03] border border-white/[0.05] text-white/60
+                hover:bg-white/[0.07] hover:border-white/[0.12] hover:text-white/90 transition-all duration-200
+                disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer
+                flex items-center justify-between">
+              <span>{p.label}</span>
+              <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded
+                             bg-white/[0.04] text-white/25 group-hover:text-white/40 transition-colors">
+                {p.tag}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* Divider */}
+        <div className="mx-5 h-px bg-gradient-to-r from-transparent via-white/[0.08] to-transparent" />
+
+        {/* Custom Trigger */}
+        <div className="px-5 py-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <h3 className="text-[11px] font-bold uppercase tracking-[0.15em] text-white/60">Custom Trigger</h3>
+          </div>
+          <p className="text-[10px] text-white/25 -mt-1">Click nodes on the map, then trigger</p>
+
+          {/* Selected nodes chips */}
+          {selectedNodes.size > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {Array.from(selectedNodes).map((t) => (
+                <span key={t} className="px-2 py-0.5 rounded-md text-[10px] font-bold
+                  bg-white/[0.08] text-white/80 border border-white/[0.08]">{t}</span>
+              ))}
+            </div>
+          )}
+
+          {/* Event type selector — custom styled */}
+          <div className="relative">
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm pointer-events-none">{activeEventIcon}</span>
+            <select value={customEvent} onChange={(e) => setCustomEvent(e.target.value)}
+              className="w-full pl-8 pr-3 py-2 rounded-lg text-xs font-medium
+                bg-[rgba(255,255,255,0.05)] border border-white/[0.08] text-white/80
+                appearance-none cursor-pointer outline-none
+                hover:bg-[rgba(255,255,255,0.08)] hover:border-white/[0.12] transition-all"
+              style={{ colorScheme: "dark" }}>
+              {EVENT_TYPES.map((e) => (
+                <option key={e.value} value={e.value} className="bg-[#0a0a0f] text-white/80">
+                  {e.icon} {e.label}
+                </option>
+              ))}
+            </select>
+            <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30 pointer-events-none"
+              viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4.5 6l3.5 4 3.5-4H4.5z" />
+            </svg>
+          </div>
+
+          {/* Severity slider */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-white/30 uppercase tracking-wider font-semibold">Severity</span>
+              <span className="text-xs font-bold font-mono text-white/70">{customSeverity}/5</span>
+            </div>
+            <div className="relative">
+              <input type="range" min={1} max={5} value={customSeverity}
+                onChange={(e) => setCustomSeverity(Number(e.target.value))}
+                className="w-full h-1.5 rounded-full appearance-none cursor-pointer
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white
+                  [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(255,255,255,0.3)] [&::-webkit-slider-thumb]:border-0
+                  [&::-webkit-slider-thumb]:cursor-pointer"
+                style={{
+                  background: `linear-gradient(to right, #22c55e, #eab308 40%, #f97316 70%, #ef4444 100%)`,
+                }} />
+              <div className="flex justify-between mt-0.5">
+                {[1,2,3,4,5].map((n) => (
+                  <span key={n} className={`text-[8px] font-mono ${customSeverity === n ? "text-white/60" : "text-white/15"}`}>{n}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Trigger button */}
+          <button onClick={() => runContagion(Array.from(selectedNodes), customEvent, customSeverity)}
+            disabled={isAnimating || selectedNodes.size === 0}
+            className="w-full px-3 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-[0.1em]
+              bg-gradient-to-r from-red-500/20 to-orange-500/20 border border-red-500/25 text-red-400
+              hover:from-red-500/30 hover:to-orange-500/30 hover:border-red-500/40 hover:text-red-300
+              transition-all duration-200 cursor-pointer
+              disabled:opacity-20 disabled:cursor-not-allowed
+              shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+            {selectedNodes.size > 0
+              ? `Trigger Contagion \u2014 ${selectedNodes.size} node${selectedNodes.size > 1 ? "s" : ""}`
+              : "Select nodes first"}
+          </button>
+        </div>
+
+        {/* Progress bar */}
+        {isAnimating && (
+          <div className="mx-5 mb-4">
+            <div className="flex justify-between text-[9px] text-white/30 mb-1 font-mono">
+              <span>PROPAGATING</span><span>{activeStep}/{totalSteps}</span>
+            </div>
+            <div className="h-1 rounded-full bg-white/[0.04] overflow-hidden">
+              <div className="h-full rounded-full transition-all duration-300 ease-out
+                bg-gradient-to-r from-red-500 to-orange-500"
+                style={{ width: `${totalSteps ? (activeStep / totalSteps) * 100 : 0}%` }} />
+            </div>
+          </div>
+        )}
+
+        {/* Results */}
+        {totalRisk > 0 && !isAnimating && (
+          <div className="mx-5 mb-4 space-y-2.5">
+            <div className="h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
+            <div className="rounded-xl bg-white/[0.02] border border-white/[0.05] p-3 space-y-2">
+              <div className="flex justify-between items-baseline">
+                <span className="text-[9px] uppercase tracking-wider text-white/30 font-semibold">Contagion Risk</span>
+                <span className="text-lg font-bold font-mono text-red-400">{totalRisk.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between items-baseline">
+                <span className="text-[9px] uppercase tracking-wider text-white/30 font-semibold">Nodes Affected</span>
+                <span className="text-sm font-bold font-mono text-amber-400">{impactMap.size}<span className="text-white/20 text-[10px]">/{networkData?.nodes.length ?? 0}</span></span>
+              </div>
+            </div>
+            <button onClick={handleReset}
+              className="w-full px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-[0.1em]
+                bg-white/[0.03] border border-white/[0.06] text-white/35
+                hover:bg-white/[0.06] hover:text-white/60 transition-all cursor-pointer">
+              Reset Network
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Legend ──────────────────────────────────────────────── */}
+      <div className="absolute top-4 right-4 z-20 rounded-xl border border-white/[0.06]
+                      bg-[rgba(8,8,12,0.75)] backdrop-blur-xl px-4 py-2.5">
+        <span className="text-[8px] uppercase tracking-[0.15em] text-white/25 block mb-2 font-semibold">Sectors</span>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+          {Object.entries(SECTOR_COLORS).map(([name, color]) => (
+            <div key={name} className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+              <span className="text-[9px] text-white/40 whitespace-nowrap">{name}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Impact Legend (visible during/after simulation) ───── */}
+      {impactMap.size > 0 && (
+        <div className="absolute bottom-4 right-4 z-20 rounded-xl border border-white/[0.06]
+                        bg-[rgba(8,8,12,0.75)] backdrop-blur-xl px-4 py-2.5">
+          <span className="text-[8px] uppercase tracking-[0.15em] text-white/25 block mb-2 font-semibold">Impact Level</span>
+          <div className="space-y-1">
+            {[
+              { label: "Critical (>50%)", color: "#ef4444" },
+              { label: "High (20-50%)", color: "#f97316" },
+              { label: "Medium (5-20%)", color: "#eab308" },
+              { label: "Unaffected", color: "rgba(255,255,255,0.3)" },
+            ].map(({ label, color }) => (
+              <div key={label} className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full border" style={{ borderColor: color, backgroundColor: color + "33" }} />
+                <span className="text-[9px] text-white/40">{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Tooltip ────────────────────────────────────────────── */}
+      {tooltip && (
+        <div className="absolute z-30 pointer-events-none rounded-xl border border-white/[0.1]
+                        bg-[rgba(8,8,12,0.92)] backdrop-blur-xl px-4 py-3 shadow-2xl min-w-[180px]"
+          style={{ left: Math.min(tooltip.x + 16, (containerRef.current?.clientWidth ?? 800) - 200), top: tooltip.y - 10 }}>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: SECTOR_COLORS[tooltip.node.sector] ?? "#666" }} />
+            <span className="text-xs font-bold text-white">{tooltip.node.id}</span>
+            <span className="text-[10px] text-white/30">{tooltip.node.name}</span>
+          </div>
+          <div className="text-[10px] text-white/40 mb-2">{tooltip.node.sector}</div>
+          <div className="space-y-1 text-[10px]">
+            <div className="flex justify-between">
+              <span className="text-white/30">Direct Exposure</span>
+              <span className="text-white/70 font-mono font-bold">{(tooltip.node.direct_exposure * 100).toFixed(0)}%</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-white/30">Contagion Impact</span>
+              <span className="font-mono font-bold" style={{ color: RISK_COLORS[
+                (impactMap.get(tooltip.node.id) ?? 0) > 0.5 ? "critical"
+                : (impactMap.get(tooltip.node.id) ?? 0) > 0.2 ? "high"
+                : (impactMap.get(tooltip.node.id) ?? 0) > 0 ? "medium" : "low"
+              ] }}>
+                {((impactMap.get(tooltip.node.id) ?? 0) * 100).toFixed(1)}%
+              </span>
+            </div>
+          </div>
+          {!isAnimating && (
+            <div className="mt-2 pt-1.5 border-t border-white/[0.06] text-[9px] text-white/20">
+              {selectedNodes.has(tooltip.node.id) ? "Click to deselect" : "Click to select as epicenter"}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Loading / Error states ─────────────────────────────── */}
+      {networkApi.loading && (
+        <div className="absolute inset-0 flex items-center justify-center z-10">
+          <div className="flex items-center gap-3 px-5 py-3 rounded-xl bg-black/60 backdrop-blur-xl border border-white/[0.06]">
+            <div className="w-4 h-4 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+            <span className="text-sm text-white/50">Loading network...</span>
+          </div>
+        </div>
+      )}
+      {networkApi.error && (
+        <div className="absolute top-4 right-4 z-20 rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3 max-w-xs">
+          <div className="text-xs font-semibold text-red-400 mb-0.5">Backend Offline</div>
+          <div className="text-[10px] text-red-400/50">Run: <code className="font-mono bg-white/[0.05] px-1 rounded">uvicorn app.main:app --port 8000</code></div>
+        </div>
+      )}
+
+      <svg ref={svgRef} className="w-full h-full" />
+    </div>
+  );
+}

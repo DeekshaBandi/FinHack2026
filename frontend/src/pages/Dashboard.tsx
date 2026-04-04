@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import PortfolioDashboard from "@/components/PortfolioDashboard";
+import { ContagionNetwork } from "@/components/ContagionNetwork";
 
 interface DashboardProps {
   platformName: string;
@@ -97,6 +98,10 @@ function Dashboard({ platformName }: DashboardProps) {
         <main className="flex-1">
           <PortfolioDashboard />
         </main>
+      ) : activeTab === "contagion" ? (
+        <main className="flex-1 animate-in">
+          <ContagionNetwork />
+        </main>
       ) : (
         <main className="flex-1 flex items-center justify-center p-6">
           <div
@@ -106,7 +111,6 @@ function Dashboard({ platformName }: DashboardProps) {
                        p-10 md:p-16 text-center
                        animate-in"
           >
-            {/* Coming Soon badge */}
             <span className="absolute top-5 right-5 px-2.5 py-1 rounded-full
                              text-[10px] font-semibold uppercase tracking-widest
                              bg-white/[0.06] text-white/30 border border-white/[0.06]">

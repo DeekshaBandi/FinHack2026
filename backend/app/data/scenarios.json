@@ -1,0 +1,62 @@
+[
+  {
+    "id": "hurricane_cat5_gulf",
+    "name": "Category 5 Hurricane — Gulf Coast",
+    "event_type": "hurricane",
+    "severity": 5,
+    "target_region": "gulf_coast",
+    "description": "Major hurricane makes landfall on Texas/Louisiana coast, devastating energy infrastructure, refineries, and coastal assets.",
+    "affected_sectors": ["Energy", "Utilities", "Real Estate", "Financials"],
+    "historical_reference": "Hurricane Harvey (2017) — $125B damage"
+  },
+  {
+    "id": "wildfire_mega_california",
+    "name": "Mega Wildfire Season — California",
+    "event_type": "wildfire",
+    "severity": 4,
+    "target_region": "california",
+    "description": "Record wildfire season across California destroys infrastructure, triggers utility liability, and disrupts tech sector operations.",
+    "affected_sectors": ["Utilities", "Technology", "Real Estate", "Financials"],
+    "historical_reference": "Camp Fire (2018) — $16.5B, triggered PG&E bankruptcy"
+  },
+  {
+    "id": "drought_severe_midwest",
+    "name": "Severe Multi-Year Drought — Midwest",
+    "event_type": "drought",
+    "severity": 4,
+    "target_region": "midwest",
+    "description": "Prolonged drought devastates agricultural output, raises food prices, and strains water-dependent industries.",
+    "affected_sectors": ["Consumer Staples", "Materials", "Utilities"],
+    "historical_reference": "2012 US Drought — $30B agricultural losses"
+  },
+  {
+    "id": "carbon_tax_100",
+    "name": "Carbon Tax $100/ton — Nationwide",
+    "event_type": "carbon_tax",
+    "severity": 3,
+    "target_region": "nationwide",
+    "description": "Federal carbon pricing at $100/ton CO2 crushes fossil fuel economics while benefiting renewables and clean tech.",
+    "affected_sectors": ["Energy", "Materials", "Industrials", "Utilities"],
+    "historical_reference": "EU ETS Phase 4 pricing trajectory"
+  },
+  {
+    "id": "sea_level_acceleration",
+    "name": "Sea Level Rise Acceleration — All Coasts",
+    "event_type": "sea_level_rise",
+    "severity": 3,
+    "target_region": "coastal",
+    "description": "Accelerated ice sheet melt triggers revised flood maps, insurance repricing, and coastal property devaluation.",
+    "affected_sectors": ["Real Estate", "Financials", "Utilities"],
+    "historical_reference": "IPCC AR6 high-emissions scenario"
+  },
+  {
+    "id": "compound_texas_grid",
+    "name": "Compound Event — Texas Grid Failure",
+    "event_type": "compound",
+    "severity": 5,
+    "target_region": "gulf_coast",
+    "description": "Simultaneous drought + extreme heat + grid failure cascades across Texas, compounding energy, agricultural, and infrastructure damage.",
+    "affected_sectors": ["Energy", "Utilities", "Consumer Staples", "Industrials"],
+    "historical_reference": "Texas Winter Storm Uri (2021) — $195B total economic impact"
+  }
+]
