@@ -22,6 +22,14 @@ from typing import Any
 import httpx
 import yfinance as yf
 
+from app.services.heatmap_risk_intel import (
+    build_diversification_fiction,
+    build_mispricing_by_scenario,
+    compute_all_scenario_dual_returns,
+    load_facility_rows,
+    live_risk_score_for_position,
+)
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CACHE_DIR = DATA_DIR / "cache"
 
@@ -165,6 +173,15 @@ HISTORICAL_SCENARIOS: list[dict[str, str]] = [
         "hazard": "wildfire",
     },
 ]
+
+CARBON_SCENARIO: dict[str, str] = {
+    "id": "carbon_tax_100",
+    "label": "Carbon Tax $100/ton",
+    "anchor_date": "2030-01-15",
+    "hazard": "carbon",
+}
+
+HEATMAP_SCENARIOS: list[dict[str, str]] = [*HISTORICAL_SCENARIOS, CARBON_SCENARIO]
 
 
 def _ring_centroid(ring: list[Any]) -> tuple[float, float] | None:
@@ -387,50 +404,8 @@ def _yf_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
     return result
 
 
-def _yf_window_return(symbol: str, anchor: str, days_before: int, days_after: int) -> float | None:
-    try:
-        mid = datetime.strptime(anchor, "%Y-%m-%d").date()
-        start = mid - timedelta(days=days_before)
-        end = mid + timedelta(days=days_after)
-        hist = yf.download(
-            symbol,
-            start=start.isoformat(),
-            end=(end + timedelta(days=1)).isoformat(),
-            progress=False,
-            auto_adjust=True,
-        )
-        if hist is None or hist.empty or "Close" not in hist.columns:
-            return None
-        closes = hist["Close"].dropna()
-        if len(closes) < 2:
-            return None
-        first = float(closes.iloc[0])
-        last = float(closes.iloc[-1])
-        if first == 0:
-            return None
-        return last / first - 1.0
-    except Exception:
-        return None
-
-
 async def fetch_yfinance_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
     return await asyncio.to_thread(_yf_quotes, symbols)
-
-
-async def compute_scenario_returns(symbols: list[str], scenarios: list[dict[str, str]]) -> dict[str, dict[str, float | None]]:
-    """For each scenario, total return from T-7d to T+7d calendar window (yfinance daily bars)."""
-
-    def worker() -> dict[str, dict[str, float | None]]:
-        out: dict[str, dict[str, float | None]] = {}
-        for sc in scenarios:
-            aid = sc["id"]
-            anchor = sc["anchor_date"]
-            out[aid] = {}
-            for sym in symbols:
-                out[aid][sym] = _yf_window_return(sym, anchor, 7, 7)
-        return out
-
-    return await asyncio.to_thread(worker)
 
 
 def load_heatmap_portfolio() -> dict[str, Any]:
@@ -438,10 +413,58 @@ def load_heatmap_portfolio() -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _live_pnl_breakdown(position_rows: list[dict[str, Any]]) -> tuple[dict[str, float], dict[str, float]]:
+    """Sum signed 1d P&L by asset_class and by position direction (long vs short legs)."""
+    by_asset: dict[str, float] = {}
+    by_side = {"long": 0.0, "short": 0.0}
+    for row in position_rows:
+        pnl = row.get("estimated_pnl_1d_musd")
+        if pnl is None:
+            continue
+        v = float(pnl)
+        ac = str(row.get("asset_class", "other")).lower()
+        by_asset[ac] = by_asset.get(ac, 0.0) + v
+        side = str(row.get("direction", "long")).lower()
+        key = "long" if side == "long" else "short"
+        by_side[key] = by_side[key] + v
+    return by_asset, by_side
+
+
+def _scenario_pnl_breakdown(
+    positions: list[dict[str, Any]],
+    by_symbol: dict[str, float | None],
+) -> tuple[dict[str, float], dict[str, float]]:
+    by_asset: dict[str, float] = {}
+    by_side = {"long": 0.0, "short": 0.0}
+    for p in positions:
+        sym = p["symbol"]
+        raw = by_symbol.get(sym)
+        if raw is None:
+            continue
+        v = float(raw)
+        ac = str(p.get("asset_class", "other")).lower()
+        by_asset[ac] = by_asset.get(ac, 0.0) + v
+        side = str(p.get("direction", "long")).lower()
+        key = "long" if side == "long" else "short"
+        by_side[key] = by_side[key] + v
+    return by_asset, by_side
+
+
+def _client_safe_errors(errors: list[str]) -> list[str]:
+    out: list[str] = []
+    for e in errors:
+        el = e.lower()
+        if "eonet" in el or "503" in el or "nasa" in el:
+            continue
+        out.append(e)
+    return out
+
+
 async def build_live_heatmap_payload() -> dict[str, Any]:
     portfolio = load_heatmap_portfolio()
     positions: list[dict[str, Any]] = portfolio.get("positions", [])
     symbols = [p["symbol"] for p in positions]
+    facility_rows = load_facility_rows()
 
     fred_task = fetch_fred_bundle()
 
@@ -450,16 +473,21 @@ async def build_live_heatmap_payload() -> dict[str, Any]:
     eonet_task = fetch_eonet_by_categories(eonet_categories, days=3650, limit=120)
 
     quotes_task = fetch_yfinance_quotes(symbols)
-    scenarios_task = compute_scenario_returns(symbols, HISTORICAL_SCENARIOS)
+    scenarios_task = asyncio.to_thread(
+        compute_all_scenario_dual_returns,
+        symbols,
+        HEATMAP_SCENARIOS,
+    )
     hur_task = load_hurricane_tracks(DEFAULT_HURRICANE_STORM_IDS)
 
-    fred, eonet, quotes, scenario_returns, hur = await asyncio.gather(
+    fred, eonet, quotes, scenario_dual, hur = await asyncio.gather(
         fred_task,
         eonet_task,
         quotes_task,
         scenarios_task,
         hur_task,
     )
+    scenario_returns, scenario_event_returns = scenario_dual
 
     errors: list[str] = []
     if isinstance(hur, dict) and hur.get("error"):
@@ -487,12 +515,15 @@ async def build_live_heatmap_payload() -> dict[str, Any]:
                 **p,
                 "quote": q,
                 "estimated_pnl_1d_musd": pnl,
+                "risk_score_0_100": live_risk_score_for_position({**p, "quote": q}, facility_rows),
             }
         )
 
-    # Predictive: per-scenario portfolio impact using historical window returns
+    by_asset_live, by_side_live = _live_pnl_breakdown(position_rows)
+
+    # Predictive: per-scenario portfolio impact using historical window returns (incl. hardcoded carbon)
     predictive: dict[str, Any] = {}
-    for sc in HISTORICAL_SCENARIOS:
+    for sc in HEATMAP_SCENARIOS:
         aid = sc["id"]
         per_sym = scenario_returns.get(aid, {})
         total = 0.0
@@ -507,13 +538,24 @@ async def build_live_heatmap_payload() -> dict[str, Any]:
             contrib = float(p["notional_musd"]) * r * direction
             breakdown[sym] = contrib
             total += contrib
+        by_asset_scen, by_side_scen = _scenario_pnl_breakdown(positions, breakdown)
         predictive[aid] = {
             "label": sc["label"],
             "hazard": sc["hazard"],
             "anchor_date": sc["anchor_date"],
             "portfolio_pnl_musd": total,
             "by_symbol": breakdown,
+            "pnl_by_asset_class_musd": {k: round(v, 4) for k, v in by_asset_scen.items()},
+            "pnl_by_side_musd": {k: round(v, 4) for k, v in by_side_scen.items()},
         }
+
+    mispricing_detector = build_mispricing_by_scenario(
+        positions,
+        HEATMAP_SCENARIOS,
+        scenario_event_returns,
+        facility_rows,
+    )
+    diversification_fiction = build_diversification_fiction()
 
     return {
         "as_of_utc": now,
@@ -537,8 +579,12 @@ async def build_live_heatmap_payload() -> dict[str, Any]:
             "positions": position_rows,
             "total_notional_musd": sum(float(p["notional_musd"]) for p in positions),
             "live_pnl_1d_musd": live_pnl_musd,
+            "live_pnl_1d_by_asset_class_musd": {k: round(v, 4) for k, v in by_asset_live.items()},
+            "live_pnl_1d_by_side_musd": {k: round(v, 4) for k, v in by_side_live.items()},
         },
-        "historical_scenarios": HISTORICAL_SCENARIOS,
+        "historical_scenarios": HEATMAP_SCENARIOS,
         "predictive_scenarios": predictive,
-        "errors": errors,
+        "mispricing_detector": mispricing_detector,
+        "diversification_fiction": diversification_fiction,
+        "errors": _client_safe_errors(errors),
     }

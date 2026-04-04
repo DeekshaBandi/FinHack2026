@@ -193,6 +193,15 @@ input[type="range"]::-webkit-slider-thumb {
   font-family: inherit;
 }
 
+/* DivIcon facility glyphs: keep hit-testing on inner nodes; non-interactive parent Marker uses this for display only */
+.leaflet-div-icon.heatmap-facility-icon {
+  pointer-events: none !important;
+}
+
+.leaflet-div-icon.heatmap-facility-icon .heatmap-facility-hit {
+  pointer-events: none !important;
+}
+
 .leaflet-control-zoom a {
   background: rgba(0, 0, 0, 0.4);
   border-color: rgba(255, 255, 255, 0.1);
