@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Mic, Paperclip, SendHorizontal } from "lucide-react";
+import { Mic, Paperclip, SendHorizontal, Loader2 } from "lucide-react";
 
 type RecommendationFilter = "All" | "Hedging" | "Rebalancing" | "Opportunistic";
+
+const API_BASE_URL = "http://localhost:8000";
 
 interface RetrievedContext {
   title: string;
@@ -34,7 +36,7 @@ const SUGGESTED_QUERIES = [
   "What is my net hurricane exposure across the whole book right now?",
   "Which energy holdings are most vulnerable to a $100/ton carbon tax?",
   "How did similar portfolios perform after Hurricane Harvey in 2017?",
-  "What’s the contagion risk if Valero takes a major hit?",
+  "What's the contagion risk if Valero takes a major hit?",
 ];
 
 const RECOMMENDATION_GROUPS: {
@@ -122,94 +124,95 @@ function sectionTitle(title: string) {
   return <h3 className="mb-3 text-[10px] font-semibold uppercase tracking-[0.25em] text-white/35">{title}</h3>;
 }
 
-function buildMockAssistantResponse(query: string): AssistantPayload {
-  const normalized = query.toLowerCase();
-
-  if (normalized.includes("hurricane exposure")) {
-    return {
-      summary:
-        "Your book shows concentrated hurricane sensitivity in Gulf Coast energy and coastal real estate, with direct loss potential clustering in a handful of names rather than being evenly distributed.",
-      insight:
-        "Net exposure is driven by CVX, HAL, LYB, SPG, and NEE, while the existing XOM short offsets only part of the gross long loss path.",
-      takeaway:
-        "The main decision question is whether to hedge the shared Gulf driver more aggressively before the next event window.",
-      contexts: [
-        { title: "IPCC Coastal Risk excerpt", source: "IPCC AR6", excerpt: "Extreme coastal flood frequency increases materially as storm surge and sea-level pressures compound." },
-        { title: "Chevron 10-K excerpt", source: "Chevron FY filing", excerpt: "A meaningful portion of downstream and export infrastructure remains exposed to Gulf Coast weather disruption." },
-        { title: "NGFS scenario note", source: "NGFS Phase IV", excerpt: "Physical risk concentration can overwhelm apparent sector diversification in climate-stressed portfolios." },
-      ],
-    };
+async function queryRAGBackend(query: string): Promise<{ response: string; sources: string[] }> {
+  const response = await fetch(`${API_BASE_URL}/api/chat/query`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ message: query }),
+  });
+  
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status}`);
   }
+  
+  return response.json();
+}
 
-  if (normalized.includes("carbon tax")) {
-    return {
-      summary:
-        "Energy and petrochemical holdings carry the heaviest transition burden under a $100/ton carbon-tax path, with valuation pressure extending beyond direct emissions costs.",
-      insight:
-        "CVX, XOM, and LYB screen as the most policy-sensitive names, while communications infrastructure appears comparatively resilient.",
-      takeaway:
-        "The practical decision is whether to rotate some carbon-sensitive exposure into transition beneficiaries before policy repricing accelerates.",
-      contexts: [
-        { title: "NGFS transition excerpt", source: "NGFS Net Zero scenario", excerpt: "Carbon-price shocks tend to compress multiples first, then operating margins as pass-through assumptions are tested." },
-        { title: "ExxonMobil 10-K excerpt", source: "ExxonMobil FY filing", excerpt: "Policy and regulatory changes remain a material source of long-dated valuation uncertainty." },
-        { title: "Sector transition note", source: "Mock research memo", excerpt: "Integrated energy and chemicals show the largest earnings sensitivity under abrupt carbon policy tightening." },
-      ],
-    };
+function parseRAGResponse(response: string, sources: string[]): AssistantPayload {
+  const paragraphs = response.split("\n\n").filter(p => p.trim());
+  
+  const summary = paragraphs[0] || response;
+  const insight = paragraphs.length > 1 ? paragraphs[1] : "See the full analysis above for detailed insights.";
+  const takeaway = paragraphs.length > 2 ? paragraphs[2] : "Consider these climate risk factors when making portfolio decisions.";
+  
+  const contexts: RetrievedContext[] = sources
+    .filter(s => s !== "error" && s !== "direct_llm_response")
+    .map((source, idx) => ({
+      title: `Source ${idx + 1}`,
+      source: source,
+      excerpt: `Retrieved from ${source} knowledge base`,
+    }));
+  
+  if (contexts.length === 0) {
+    contexts.push({
+      title: "AI Analysis",
+      source: "Llama 3.3 70B",
+      excerpt: "Response generated using climate risk knowledge base",
+    });
   }
-
-  if (normalized.includes("harvey") || normalized.includes("2017")) {
-    return {
-      summary:
-        "Comparable portfolios with Gulf-heavy industrial exposure typically underperformed immediately after Harvey, with recovery dispersion driven by balance-sheet resilience and insurance coverage quality.",
-      insight:
-        "Drawdowns were deepest where multiple holdings shared the same physical driver, especially across refining, chemicals, and logistics-linked names.",
-      takeaway:
-        "Historical analogs reinforce that concentration management matters more than broad sector labels in event recovery.",
-      contexts: [
-        { title: "Historical event brief", source: "Mock event archive", excerpt: "Harvey-era losses persisted longest in names with repeated downtime, weaker coverage, and clustered asset footprints." },
-        { title: "Insurance recovery note", source: "Mock broker summary", excerpt: "Balance-sheet strength and claims recovery timing were more important than initial damage estimates." },
-        { title: "Portfolio analog memo", source: "Mock PM note", excerpt: "Short hedges helped, but concentrated Gulf exposure still dominated near-term portfolio volatility." },
-      ],
-    };
-  }
-
-  return {
-    summary:
-      "Contagion risk rises when a core industrial node takes a major hit because adjacent suppliers, logistics, and downstream users can all experience second-order pressure.",
-    insight:
-      "The portfolio’s vulnerability comes less from one single name and more from the number of exposures tied to the same operating corridor and recovery timeline.",
-    takeaway:
-      "The decision frame should be whether to hedge the shared driver now or keep dry powder for post-shock dislocation opportunities.",
-    contexts: [
-      { title: "Supply chain excerpt", source: "Mock contagion note", excerpt: "Shared infrastructure and feedstock dependencies can turn a single-issuer shock into a multi-name portfolio event." },
-      { title: "10-K corridor note", source: "Mock filing excerpt", excerpt: "Concentrated corridor exposure increases the probability of synchronized operational disruption." },
-      { title: "Stress archive", source: "Mock internal archive", excerpt: "Second-order loss channels often become visible only after the initial event is absorbed by the market." },
-    ],
-  };
+  
+  return { summary, insight, takeaway, contexts };
 }
 
 function RagAdvisorTab() {
   const [selectedFilter, setSelectedFilter] = useState<RecommendationFilter>("All");
   const [inputValue, setInputValue] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
   const filteredGroups = useMemo(() => {
     if (selectedFilter === "All") return RECOMMENDATION_GROUPS;
     return RECOMMENDATION_GROUPS.filter((group) => group.key === selectedFilter);
   }, [selectedFilter]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const trimmed = inputValue.trim();
-    if (!trimmed) return;
-
-    const assistantPayload = buildMockAssistantResponse(trimmed);
+    if (!trimmed || isLoading) return;
 
     setMessages((prev) => [
       ...prev,
       { id: `user-${Date.now()}`, role: "user", text: trimmed },
-      { id: `assistant-${Date.now() + 1}`, role: "assistant", payload: assistantPayload },
     ]);
     setInputValue("");
+    setIsLoading(true);
+
+    try {
+      const result = await queryRAGBackend(trimmed);
+      const assistantPayload = parseRAGResponse(result.response, result.sources);
+      
+      setMessages((prev) => [
+        ...prev,
+        { id: `assistant-${Date.now()}`, role: "assistant", payload: assistantPayload },
+      ]);
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        { 
+          id: `assistant-${Date.now()}`, 
+          role: "assistant", 
+          payload: {
+            summary: "Unable to connect to the AI assistant. Please ensure the backend server is running on http://localhost:8000",
+            insight: `Error: ${error instanceof Error ? error.message : "Unknown error"}`,
+            takeaway: "Try refreshing the page or check if the backend server is running.",
+            contexts: [{ title: "Error", source: "System", excerpt: "Connection failed" }],
+          }
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -232,46 +235,6 @@ function RagAdvisorTab() {
             </div>
           </FadePanel>
 
-          <FadePanel delay={100} className="rounded-xl border border-white/10 bg-black/40 p-5 backdrop-blur-md">
-            {sectionTitle("Filters")}
-            <div className="flex flex-wrap gap-2">
-              {(["All", "Hedging", "Rebalancing", "Opportunistic"] as RecommendationFilter[]).map((filter) => (
-                <button
-                  key={filter}
-                  type="button"
-                  onClick={() => setSelectedFilter(filter)}
-                  className={`rounded-full border px-3 py-2 text-[11px] font-medium transition ${
-                    selectedFilter === filter
-                      ? "border-amber-300/40 bg-amber-400/10 text-amber-200"
-                      : "border-white/10 bg-white/5 text-white/55 hover:text-white/80"
-                  }`}
-                >
-                  {filter}
-                </button>
-              ))}
-            </div>
-          </FadePanel>
-
-          <FadePanel delay={200} className="rounded-xl border border-white/10 bg-black/40 p-5 backdrop-blur-md">
-            {sectionTitle("Summary")}
-            <div className="space-y-3 text-sm">
-              <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-white/80">
-                Scenario: Gulf Coast Hurricane — Cat 4
-              </div>
-              <div className="flex items-center justify-between text-white/60">
-                <span>Holdings impacted</span>
-                <span className="text-white">5</span>
-              </div>
-              <div className="flex items-center justify-between text-white/60">
-                <span>Net impact</span>
-                <span className="text-white">-$12.4M</span>
-              </div>
-              <div className="flex items-center justify-between text-white/60">
-                <span>Recommendations</span>
-                <span className="font-medium text-amber-300">6</span>
-              </div>
-            </div>
-          </FadePanel>
         </div>
 
         <div className="min-h-0 space-y-4 overflow-y-auto pr-1 no-scrollbar">
@@ -315,15 +278,15 @@ function RagAdvisorTab() {
                         <div key={message.id} className="space-y-3">
                           <div className="max-w-3xl rounded-xl border border-white/10 bg-white/5 px-4 py-4 text-sm text-white/80">
                             <p className="mb-2 text-[10px] uppercase tracking-[0.22em] text-white/35">Assistant</p>
-                            <p className="leading-relaxed text-white/80">{message.payload?.summary}</p>
+                            <p className="leading-relaxed text-white/80 whitespace-pre-wrap">{message.payload?.summary}</p>
                             <div className="mt-4 grid gap-3 md:grid-cols-2">
                               <div className="rounded-xl border border-white/10 bg-black/20 p-3">
                                 <p className="text-[10px] uppercase tracking-[0.18em] text-white/35">Portfolio Insight</p>
-                                <p className="mt-2 leading-relaxed text-white/70">{message.payload?.insight}</p>
+                                <p className="mt-2 leading-relaxed text-white/70 whitespace-pre-wrap">{message.payload?.insight}</p>
                               </div>
                               <div className="rounded-xl border border-white/10 bg-black/20 p-3">
                                 <p className="text-[10px] uppercase tracking-[0.18em] text-white/35">Risk Takeaway</p>
-                                <p className="mt-2 leading-relaxed text-white/70">{message.payload?.takeaway}</p>
+                                <p className="mt-2 leading-relaxed text-white/70 whitespace-pre-wrap">{message.payload?.takeaway}</p>
                               </div>
                             </div>
                           </div>
@@ -343,6 +306,12 @@ function RagAdvisorTab() {
                         </div>
                       ),
                     )}
+                    {isLoading && (
+                      <div className="flex items-center gap-3 text-white/60">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                        <span className="text-sm">Analyzing with AI...</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -352,8 +321,15 @@ function RagAdvisorTab() {
                   <textarea
                     value={inputValue}
                     onChange={(event) => setInputValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        handleSend();
+                      }
+                    }}
                     placeholder="Ask about portfolio exposure, climate risk, or company vulnerability"
                     className="min-h-[96px] w-full resize-none bg-transparent text-sm text-white outline-none placeholder:text-white/25"
+                    disabled={isLoading}
                   />
                   <div className="mt-3 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
@@ -373,10 +349,15 @@ function RagAdvisorTab() {
                     <button
                       type="button"
                       onClick={handleSend}
-                      className="inline-flex items-center gap-2 rounded-xl border border-amber-300/40 bg-amber-400/10 px-4 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-400/15"
+                      disabled={isLoading || !inputValue.trim()}
+                      className="inline-flex items-center gap-2 rounded-xl border border-amber-300/40 bg-amber-400/10 px-4 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-400/15 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <SendHorizontal size={15} />
-                      Send
+                      {isLoading ? (
+                        <Loader2 size={15} className="animate-spin" />
+                      ) : (
+                        <SendHorizontal size={15} />
+                      )}
+                      {isLoading ? "Analyzing..." : "Send"}
                     </button>
                   </div>
                 </div>
@@ -384,30 +365,6 @@ function RagAdvisorTab() {
             </div>
           </FadePanel>
 
-          <FadePanel delay={400} className="rounded-xl border border-white/10 bg-black/40 p-5 backdrop-blur-md">
-            {sectionTitle("Actionable Recommendations")}
-            <div className="space-y-5">
-              {filteredGroups.map((group) => (
-                <div key={group.key}>
-                  <p className="mb-3 text-sm font-medium text-white">{group.title}</p>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    {group.cards.map((card) => (
-                      <div key={card.title} className="rounded-xl border border-white/10 bg-white/5 p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <p className="text-sm font-medium leading-snug text-white">{card.title}</p>
-                          <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-amber-300">
-                            {card.tag}
-                          </span>
-                        </div>
-                        <p className="mt-3 text-sm leading-relaxed text-white/55">{card.explanation}</p>
-                        {card.action && <p className="mt-3 text-sm text-white/75">{card.action}</p>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </FadePanel>
         </div>
       </div>
     </div>
