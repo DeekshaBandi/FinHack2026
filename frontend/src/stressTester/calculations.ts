@@ -47,6 +47,10 @@ function getImpactGate(holding: PortfolioHolding, inputs: ScenarioInputs) {
 function getSectorSensitivityMultiplier(holding: PortfolioHolding, scenarioType: ScenarioType) {
   const sectorBase: Record<string, Record<ScenarioType, number>> = {
     "Integrated Energy": { hurricane: 1.3, wildfire: 0.85, flood: 1.15, drought: 1.05, carbon: 1.25 },
+    "Oil & Gas Refining": { hurricane: 1.38, wildfire: 0.78, flood: 1.20, drought: 1.08, carbon: 1.32 },
+    "Independent Power": { hurricane: 1.22, wildfire: 0.88, flood: 1.12, drought: 1.18, carbon: 1.05 },
+    "Industrial REIT": { hurricane: 1.10, wildfire: 0.95, flood: 1.25, drought: 0.72, carbon: 0.82 },
+    "P&C Insurance": { hurricane: 1.35, wildfire: 1.30, flood: 1.28, drought: 0.82, carbon: 0.92 },
     "Oilfield Services": { hurricane: 1.28, wildfire: 0.8, flood: 1.05, drought: 0.98, carbon: 1.1 },
     "Retail REIT": { hurricane: 1.08, wildfire: 0.96, flood: 1.22, drought: 0.74, carbon: 0.85 },
     Utility: { hurricane: 1.15, wildfire: 0.9, flood: 1.18, drought: 1.1, carbon: 0.94 },
