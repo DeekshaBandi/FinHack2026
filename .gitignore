@@ -1,0 +1,15 @@
+# Python
+backend/venv/
+__pycache__/
+*.pyc
+.env
+
+# Node
+node_modules/
+dist/
+
+# ChromaDB
+backend/app/rag/chroma_db/
+
+# OS
+.DS_Store
