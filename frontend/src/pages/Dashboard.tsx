@@ -2,6 +2,9 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import PortfolioDashboard from "@/components/PortfolioDashboard";
 import { ContagionNetwork } from "@/components/ContagionNetwork";
+import ClimateRiskHeatmap from "@/components/ClimateRiskHeatmap";
+import CorporateStressTester from "@/components/CorporateStressTester";
+import RagAdvisorTab from "@/components/RagAdvisorTab";
 
 interface DashboardProps {
   platformName: string;
@@ -48,9 +51,15 @@ const TABS: TabConfig[] = [
 
 function Dashboard({ platformName }: DashboardProps) {
   const [activeTab, setActiveTab] = useState("portfolio");
+  const [stressTicker, setStressTicker] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const current = TABS.find((t) => t.id === activeTab)!;
+
+  const openStressTest = (ticker?: string) => {
+    setStressTicker(ticker ?? null);
+    setActiveTab("stress");
+  };
 
   return (
     <div className="relative z-10 min-h-screen flex flex-col">
@@ -95,12 +104,24 @@ function Dashboard({ platformName }: DashboardProps) {
 
       {/* Content */}
       {activeTab === "portfolio" ? (
-        <main className="flex-1">
+        <main className="flex-1 min-h-0">
           <PortfolioDashboard />
         </main>
       ) : activeTab === "contagion" ? (
         <main className="flex-1 animate-in">
           <ContagionNetwork />
+        </main>
+      ) : activeTab === "heatmap" ? (
+        <main className="flex-1 min-h-0">
+          <ClimateRiskHeatmap onOpenStressTest={openStressTest} />
+        </main>
+      ) : activeTab === "stress" ? (
+        <main className="flex-1 min-h-0">
+          <CorporateStressTester initialTicker={stressTicker} />
+        </main>
+      ) : activeTab === "advisor" ? (
+        <main className="flex-1 min-h-0">
+          <RagAdvisorTab />
         </main>
       ) : (
         <main className="flex-1 flex items-center justify-center p-6">
@@ -122,7 +143,9 @@ function Dashboard({ platformName }: DashboardProps) {
             </h2>
 
             <p className="text-sm md:text-base text-white/40 leading-relaxed max-w-md mx-auto">
-              {current.description}
+              {activeTab === "stress" && stressTicker
+                ? `Stress test context loaded for ${stressTicker}. ${current.description}`
+                : current.description}
             </p>
           </div>
         </main>
