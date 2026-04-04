@@ -1,0 +1,48 @@
+{
+  "label": "Climate stress book — VLO / NRG / EGP / ALL + WTI / Henry Hub",
+  "focus_tickers": ["VLO", "NRG", "EGP", "ALL"],
+  "positions": [
+    {
+      "symbol": "VLO",
+      "name": "Valero Energy",
+      "asset_class": "equity",
+      "notional_musd": 5.0,
+      "direction": "long"
+    },
+    {
+      "symbol": "NRG",
+      "name": "NRG Energy",
+      "asset_class": "equity",
+      "notional_musd": 3.0,
+      "direction": "long"
+    },
+    {
+      "symbol": "EGP",
+      "name": "EastGroup Properties",
+      "asset_class": "equity",
+      "notional_musd": 2.0,
+      "direction": "long"
+    },
+    {
+      "symbol": "ALL",
+      "name": "Allstate",
+      "asset_class": "equity",
+      "notional_musd": 4.0,
+      "direction": "long"
+    },
+    {
+      "symbol": "CL=F",
+      "name": "WTI crude (continuous)",
+      "asset_class": "commodity",
+      "notional_musd": 4.0,
+      "direction": "long"
+    },
+    {
+      "symbol": "NG=F",
+      "name": "Natural gas (continuous)",
+      "asset_class": "commodity",
+      "notional_musd": 2.0,
+      "direction": "short"
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+"""RAG service — ChromaDB retrieval + Groq Llama 3 generation. Stub until corpus is ingested."""
+
+import os
+
+from app.models.schemas import ChatResponse
+
+SYSTEM_PROMPT = """You are a senior climate risk analyst at a hedge fund. You provide actionable,
+data-driven insights about climate risks to financial portfolios. Ground your answers in TCFD frameworks,
+IPCC science, and financial risk management best practices. Be concise and quantitative."""
+
+
+async def query_rag(message: str, context: str | None = None) -> ChatResponse:
+    """Query RAG pipeline. Falls back to direct LLM if ChromaDB not available."""
+    try:
+        from groq import Groq
+        client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
+
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if context:
+            messages.append({"role": "system", "content": f"Portfolio context: {context}"})
+        messages.append({"role": "user", "content": message})
+
+        # Try ChromaDB retrieval first
+        sources = []
+        try:
+            import chromadb
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer("all-MiniLM-L6-v2")
+            db_path = os.path.join(os.path.dirname(__file__), "..", "rag", "chroma_db")
+            client_db = chromadb.PersistentClient(path=db_path)
+            collection = client_db.get_collection("climate_docs")
+            embedding = model.encode([message]).tolist()
+            results = collection.query(query_embeddings=embedding, n_results=3, include=["documents", "metadatas"])
+            if results["documents"] and results["documents"][0]:
+                chunks = results["documents"][0]
+                sources = [m.get("source", "unknown") for m in (results["metadatas"][0] if results["metadatas"] else [])]
+                rag_context = "\n\n".join(chunks)
+                messages.insert(1, {"role": "system", "content": f"Retrieved context:\n{rag_context}"})
+        except Exception:
+            sources = ["direct_llm_response"]
+
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile", messages=messages, max_tokens=1024,
+        )
+        return ChatResponse(response=response.choices[0].message.content or "", sources=sources)
+    except Exception as e:
+        return ChatResponse(
+            response=f"AI service unavailable. Error: {str(e)[:100]}. Please set GROQ_API_KEY environment variable.",
+            sources=["error"],
+        )

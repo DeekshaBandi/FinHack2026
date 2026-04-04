@@ -242,3 +242,44 @@
   letter-spacing: 0.06em;
   backdrop-filter: blur(14px);
 }
+
+/* Dark select dropdown styling */
+select {
+  color-scheme: dark;
+}
+select option {
+  background-color: #0a0a0f;
+  color: rgba(255, 255, 255, 0.8);
+  padding: 8px 12px;
+}
+select option:hover,
+select option:checked {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Custom range slider track */
+input[type="range"] {
+  -webkit-appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 0 8px rgba(255,255,255,0.3);
+  cursor: pointer;
+  border: none;
+}
+
+/* Heatmap facility icon styles */
+.leaflet-div-icon.heatmap-facility-icon {
+  pointer-events: none !important;
+}
+
+.leaflet-div-icon.heatmap-facility-icon .heatmap-facility-hit {
+  pointer-events: none !important;
+}
