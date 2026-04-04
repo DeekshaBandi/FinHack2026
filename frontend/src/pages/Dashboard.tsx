@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import PortfolioDashboard from "@/components/PortfolioDashboard";
+import ContagionNetworkTab from "@/components/ContagionNetwork";
 
 interface DashboardProps {
   platformName: string;
@@ -96,6 +97,10 @@ function Dashboard({ platformName }: DashboardProps) {
       {activeTab === "portfolio" ? (
         <main className="flex-1">
           <PortfolioDashboard />
+        </main>
+      ) : activeTab === "contagion" ? (
+        <main className="flex-1">
+          <ContagionNetworkTab />
         </main>
       ) : (
         <main className="flex-1 flex items-center justify-center p-6">
