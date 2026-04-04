@@ -227,13 +227,14 @@ interface FacilityRiskSnapshot {
 const MAP_CENTER: [number, number] = [32, -96];
 const INITIAL_ZOOM = 5;
 
+/** Map + control palette: one hue per EONET natural-disaster family (readable on dark basemap). */
 const HAZARDS: { id: HazardId; label: string; icon: string; color: string }[] = [
-  { id: "tornado", label: "Severe storms (EONET)", icon: "🌪️", color: "#fb923c" },
-  { id: "wildfire", label: "Wildfire", icon: "🔥", color: "#ef4444" },
-  { id: "drought", label: "Drought", icon: "☀️", color: "#eab308" },
-  { id: "heatwave", label: "Temperature extremes", icon: "🌡️", color: "#f43f5e" },
-  { id: "flood", label: "Floods", icon: "🌊", color: "#3b82f6" },
-  { id: "freeze", label: "Snow / ice", icon: "❄️", color: "#818cf8" },
+  { id: "tornado", label: "Severe storms (EONET)", icon: "🌪️", color: "#f97316" },
+  { id: "wildfire", label: "Wildfire", icon: "🔥", color: "#dc2626" },
+  { id: "drought", label: "Drought", icon: "☀️", color: "#ca8a04" },
+  { id: "heatwave", label: "Temperature extremes", icon: "🌡️", color: "#e11d48" },
+  { id: "flood", label: "Floods", icon: "🌊", color: "#2563eb" },
+  { id: "freeze", label: "Snow / ice", icon: "❄️", color: "#6366f1" },
 ];
 
 const TICKER_COLOR: Record<string, string> = {
@@ -284,6 +285,11 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
     g: parseInt(h.slice(2, 4), 16),
     b: parseInt(h.slice(4, 6), 16),
   };
+}
+
+function hexWithAlpha(hex: string, alpha: number): string {
+  const { r, g, b } = hexToRgb(hex);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 function mixToRed(baseHex: string, stress01: number): string {
@@ -1909,7 +1915,7 @@ export function ClimateRiskHeatmap({ onOpenStressTest }: ClimateRiskHeatmapProps
         </div>
 
         <div className="pointer-events-auto absolute bottom-24 left-2 z-[600] flex max-h-[min(42vh,320px)] w-[min(220px,calc(100%-1rem))] flex-col gap-2 overflow-y-auto rounded-xl border border-white/10 bg-black/75 p-2.5 text-xs text-white/90 shadow-lg backdrop-blur-md sm:left-3">
-          <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-white/70">Layers</p>
+          <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-white/70">Natural disasters</p>
           <div className="flex flex-wrap gap-1.5">
             <button
               type="button"
@@ -1927,22 +1933,35 @@ export function ClimateRiskHeatmap({ onOpenStressTest }: ClimateRiskHeatmapProps
             </button>
           </div>
           <div className="flex flex-col gap-1.5">
-            {HAZARDS.map((h) => (
-              <label
-                key={h.id}
-                className="flex cursor-pointer items-center gap-2 rounded-full border border-white/10 bg-white/5 px-2.5 py-1.5 transition hover:bg-white/10"
-              >
-                <input
-                  type="checkbox"
-                  className="h-3.5 w-3.5 shrink-0 accent-amber-400"
-                  checked={hazardToggles[h.id]}
-                  onChange={() => setHazardToggles((prev) => ({ ...prev, [h.id]: !prev[h.id] }))}
-                />
-                <span className="leading-tight">
-                  {h.icon} <span className="text-[11px]">{h.label}</span>
-                </span>
-              </label>
-            ))}
+            {HAZARDS.map((h) => {
+              const on = hazardToggles[h.id];
+              return (
+                <label
+                  key={h.id}
+                  className="flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 transition"
+                  style={{
+                    borderColor: hexWithAlpha(h.color, on ? 0.55 : 0.22),
+                    backgroundColor: hexWithAlpha(h.color, on ? 0.14 : 0.05),
+                    boxShadow: on ? `0 0 14px ${hexWithAlpha(h.color, 0.2)}` : undefined,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 shrink-0"
+                    style={{ accentColor: h.color }}
+                    checked={on}
+                    onChange={() => setHazardToggles((prev) => ({ ...prev, [h.id]: !prev[h.id] }))}
+                  />
+                  <span
+                    className="size-2 shrink-0 rounded-full ring-1 ring-white/20"
+                    style={{ backgroundColor: h.color }}
+                  />
+                  <span className="leading-tight">
+                    {h.icon} <span className="text-[11px] text-white/90">{h.label}</span>
+                  </span>
+                </label>
+              );
+            })}
           </div>
         </div>
 
@@ -2015,27 +2034,31 @@ export function ClimateRiskHeatmap({ onOpenStressTest }: ClimateRiskHeatmapProps
 
           <Pane name="heatmap-eonet" style={{ zIndex: 430 }}>
             <LayerGroup>
-              {filteredEonet.map((ev) => (
-                <CircleMarker
-                  key={`${ev.id}-${ev.eonet_category}`}
-                  center={[ev.lat, ev.lng]}
-                  radius={EONET_MARKER_RADIUS_PX}
-                  pathOptions={{
-                    color: "#ffffff",
-                    weight: 2,
-                    fillColor: HAZARDS.find((h) => hazardMap[h.id] === ev.eonet_category)?.color ?? "#94a3b8",
-                    fillOpacity: 0.9,
-                  }}
-                >
-                  <Popup>
-                    <div className="max-w-xs text-slate-900">
-                      <p className="font-semibold">{ev.title}</p>
-                      <p className="text-xs">{ev.eonet_category}</p>
-                      {ev.date ? <p className="text-xs opacity-70">{ev.date}</p> : null}
-                    </div>
-                  </Popup>
-                </CircleMarker>
-              ))}
+              {filteredEonet.map((ev) => {
+                const disasterColor =
+                  HAZARDS.find((h) => hazardMap[h.id] === ev.eonet_category)?.color ?? "#94a3b8";
+                return (
+                  <CircleMarker
+                    key={`${ev.id}-${ev.eonet_category}`}
+                    center={[ev.lat, ev.lng]}
+                    radius={EONET_MARKER_RADIUS_PX}
+                    pathOptions={{
+                      color: hexWithAlpha(disasterColor, 0.95),
+                      weight: 2,
+                      fillColor: disasterColor,
+                      fillOpacity: 0.88,
+                    }}
+                  >
+                    <Popup>
+                      <div className="max-w-xs text-slate-900">
+                        <p className="font-semibold">{ev.title}</p>
+                        <p className="text-xs">{ev.eonet_category}</p>
+                        {ev.date ? <p className="text-xs opacity-70">{ev.date}</p> : null}
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                );
+              })}
             </LayerGroup>
           </Pane>
 
