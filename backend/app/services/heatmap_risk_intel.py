@@ -1,9 +1,8 @@
+from __future__ import annotations
 """
 Risk heatmap intelligence: hardcoded diversification narrative, mispricing detector
 (sensitivity × facility footprint vs yfinance event window), and carbon-tax scenario support.
 """
-
-from __future__ import annotations
 
 import json
 from datetime import date, datetime, timedelta

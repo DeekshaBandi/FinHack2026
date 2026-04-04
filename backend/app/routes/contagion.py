@@ -1,3 +1,4 @@
+from __future__ import annotations
 from fastapi import APIRouter
 
 from app.models.schemas import ContagionResponse, ContagionSimulateRequest

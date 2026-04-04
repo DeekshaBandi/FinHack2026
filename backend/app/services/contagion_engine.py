@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Contagion Engine — BFS cascade propagation through supply chain graph.
 

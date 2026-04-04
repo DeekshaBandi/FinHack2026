@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Post-stress-test recommendation engine."""
 
 from app.models.schemas import RecommendationItem, RecommendationsResponse, StressTestResponse

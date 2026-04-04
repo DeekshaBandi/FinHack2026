@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Fetch and cache external climate / market datasets for the Risk Heatmap.
 
@@ -7,8 +8,6 @@ Sources (HTTP):
   - FRED CSV exports — WTI, Henry Hub gas, IG/HY option-adjusted spreads
   - yfinance — equity/continuous futures quotes and historical windows for scenario P&L
 """
-
-from __future__ import annotations
 
 import asyncio
 import csv

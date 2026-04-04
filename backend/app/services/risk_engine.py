@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Risk Engine — Climate VaR calculator, portfolio-level stress test aggregation,
 long/short P&L accounting, and hidden concentration detection.
