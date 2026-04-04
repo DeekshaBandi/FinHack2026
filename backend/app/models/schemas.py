@@ -57,6 +57,7 @@ class ContagionNode(BaseModel):
     sector: str
     hq_lat: float = 0.0
     hq_lng: float = 0.0
+    market_cap: float = 0.0
     x: float | None = None
     y: float | None = None
     direct_exposure: float = 0.0

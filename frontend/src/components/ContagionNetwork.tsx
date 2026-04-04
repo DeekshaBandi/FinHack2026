@@ -35,13 +35,30 @@ const PRESETS = [
   { label: "Compound \u2014 Texas Grid", tag: "CAT-5", epicenters: ["XOM", "NEE", "TSLA"], event: "compound", severity: 5 },
 ];
 
+/* ── Types ────────────────────────────────────────────────────── */
+
+interface PropLogEntry {
+  step: number;
+  from: string;
+  to: string;
+  weight: number;
+  impact: number;
+}
+
+interface PropagationResult {
+  timeline: ContagionTimelineStep[];
+  impacts: Map<string, number>;
+  totalRisk: number;
+  log: PropLogEntry[];
+}
+
 /* ── Client-side BFS propagation ─────────────────────────────── */
 
 function clientPropagate(
   edges: ContagionEdge[],
   epicenters: string[],
   severity: number,
-): { timeline: ContagionTimelineStep[]; impacts: Map<string, number>; totalRisk: number } {
+): PropagationResult {
   const adj = new Map<string, Array<{ neighbor: string; weight: number }>>();
   for (const e of edges) {
     const s = typeof e.source === "string" ? e.source : e.source.id;
@@ -52,21 +69,23 @@ function clientPropagate(
     adj.get(t)!.push({ neighbor: s, weight: e.weight });
   }
   const sevMult = severity / 5;
-  let queue = epicenters.map((t) => ({ ticker: t, impact: sevMult * 0.85 }));
+  let queue = epicenters.map((t) => ({ ticker: t, impact: sevMult * 0.85, from: "ORIGIN" }));
   const visited = new Map<string, number>();
   const timeline: ContagionTimelineStep[] = [];
+  const log: PropLogEntry[] = [];
   let step = 0;
   while (queue.length > 0) {
     const next: typeof queue = [];
     const stepNodes: Array<{ ticker: string; impact: number }> = [];
-    for (const { ticker, impact } of queue) {
+    for (const { ticker, impact, from } of queue) {
       if (visited.has(ticker)) continue;
       visited.set(ticker, impact);
       stepNodes.push({ ticker, impact: Math.round(impact * 1000) / 1000 });
+      log.push({ step, from, to: ticker, weight: step === 0 ? 1.0 : impact, impact });
       for (const { neighbor, weight } of adj.get(ticker) ?? []) {
         const prop = impact * weight * DECAY_FACTOR;
         if (prop > CONTAGION_THRESHOLD && !visited.has(neighbor)) {
-          next.push({ ticker: neighbor, impact: prop });
+          next.push({ ticker: neighbor, impact: prop, from: ticker });
         }
       }
     }
@@ -78,7 +97,17 @@ function clientPropagate(
   for (const [t, v] of visited) {
     if (!epicenters.includes(t)) totalRisk += v;
   }
-  return { timeline, impacts: visited, totalRisk };
+  return { timeline, impacts: visited, totalRisk, log };
+}
+
+/** Estimated monetary loss: impact × market_cap × 5% (equity VaR from contagion) */
+const LOSS_FACTOR = 0.05;
+function estimateLoss(impact: number, marketCapM: number): number {
+  return impact * marketCapM * LOSS_FACTOR;
+}
+function formatLoss(lossM: number): string {
+  if (lossM >= 1000) return `$${(lossM / 1000).toFixed(1)}B`;
+  return `$${lossM.toFixed(0)}M`;
 }
 
 /* ── Component ───────────────────────────────────────────────── */
@@ -98,6 +127,8 @@ export function ContagionNetwork() {
   const [customEvent, setCustomEvent] = useState("hurricane");
   const [customSeverity, setCustomSeverity] = useState(4);
   const [impactMap, setImpactMap] = useState<Map<string, number>>(new Map());
+  const [propLog, setPropLog] = useState<PropLogEntry[]>([]);
+  const [visibleLogIdx, setVisibleLogIdx] = useState(0);
 
   const networkApi = useApi<ContagionResponse>();
 
@@ -331,22 +362,30 @@ export function ContagionNetwork() {
     if (!networkData || isAnimating) return;
     animTimers.current.forEach(clearTimeout);
     animTimers.current = [];
-    const { timeline, impacts, totalRisk: risk } = clientPropagate(networkData.edges, epicenters, severity);
+    const { timeline, impacts, totalRisk: risk, log } = clientPropagate(networkData.edges, epicenters, severity);
     setIsAnimating(true);
     setTotalSteps(timeline.length);
     setTotalRisk(risk);
     setSelectedNodes(new Set());
+    setPropLog(log);
+    setVisibleLogIdx(0);
     const progressiveImpacts = new Map<string, number>();
     timeline.forEach((step, idx) => {
       const timer = setTimeout(() => {
         setActiveStep(idx + 1);
         for (const nd of step.nodes) progressiveImpacts.set(nd.ticker, nd.impact);
         setImpactMap(new Map(progressiveImpacts));
-        if (idx === timeline.length - 1) setIsAnimating(false);
+        // Reveal log entries for this step
+        const logUpTo = log.filter((l) => l.step <= idx).length;
+        setVisibleLogIdx(logUpTo);
+        if (idx === timeline.length - 1) {
+          setIsAnimating(false);
+          setVisibleLogIdx(log.length);
+        }
       }, (idx + 1) * STEP_DELAY);
       animTimers.current.push(timer);
     });
-    if (timeline.length === 0) { setIsAnimating(false); setImpactMap(impacts); }
+    if (timeline.length === 0) { setIsAnimating(false); setImpactMap(impacts); setVisibleLogIdx(log.length); }
   }, [networkData, isAnimating]);
 
   const handleReset = useCallback(() => {
@@ -354,6 +393,7 @@ export function ContagionNetwork() {
     animTimers.current = [];
     setTotalRisk(0); setActiveStep(0); setTotalSteps(0);
     setSelectedNodes(new Set()); setImpactMap(new Map()); setIsAnimating(false);
+    setPropLog([]); setVisibleLogIdx(0);
   }, []);
 
   const activeEventIcon = EVENT_TYPES.find((e) => e.value === customEvent)?.icon ?? "";
@@ -511,40 +551,103 @@ export function ContagionNetwork() {
         )}
       </div>
 
-      {/* ── Legend ──────────────────────────────────────────────── */}
-      <div className="absolute top-4 right-4 z-20 rounded-xl border border-white/[0.06]
-                      bg-[rgba(8,8,12,0.75)] backdrop-blur-xl px-4 py-2.5">
-        <span className="text-[8px] uppercase tracking-[0.15em] text-white/25 block mb-2 font-semibold">Sectors</span>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-          {Object.entries(SECTOR_COLORS).map(([name, color]) => (
-            <div key={name} className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
-              <span className="text-[9px] text-white/40 whitespace-nowrap">{name}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ── Impact Legend (visible during/after simulation) ───── */}
-      {impactMap.size > 0 && (
-        <div className="absolute bottom-4 right-4 z-20 rounded-xl border border-white/[0.06]
-                        bg-[rgba(8,8,12,0.75)] backdrop-blur-xl px-4 py-2.5">
-          <span className="text-[8px] uppercase tracking-[0.15em] text-white/25 block mb-2 font-semibold">Impact Level</span>
-          <div className="space-y-1">
-            {[
-              { label: "Critical (>50%)", color: "#ef4444" },
-              { label: "High (20-50%)", color: "#f97316" },
-              { label: "Medium (5-20%)", color: "#eab308" },
-              { label: "Unaffected", color: "rgba(255,255,255,0.3)" },
-            ].map(({ label, color }) => (
-              <div key={label} className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full border" style={{ borderColor: color, backgroundColor: color + "33" }} />
-                <span className="text-[9px] text-white/40">{label}</span>
+      {/* ── Right Sidebar ────────────────────────────────────────── */}
+      <div className="absolute top-4 right-4 z-20 w-[250px] space-y-2.5">
+        {/* Sectors Legend */}
+        <div className="rounded-xl border border-white/[0.06] bg-[rgba(8,8,12,0.75)] backdrop-blur-xl px-4 py-2.5">
+          <span className="text-[8px] uppercase tracking-[0.15em] text-white/25 block mb-2 font-semibold">Sectors</span>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            {Object.entries(SECTOR_COLORS).map(([name, color]) => (
+              <div key={name} className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                <span className="text-[9px] text-white/40 whitespace-nowrap">{name}</span>
               </div>
             ))}
           </div>
         </div>
-      )}
+
+        {/* Top 5 Risk Scores (visible after simulation) */}
+        {impactMap.size > 0 && networkData && (() => {
+          const ranked = networkData.nodes
+            .map((n) => ({ ...n, impact: impactMap.get(n.id) ?? 0, loss: estimateLoss(impactMap.get(n.id) ?? 0, n.market_cap) }))
+            .filter((n) => n.impact > 0)
+            .sort((a, b) => b.impact - a.impact)
+            .slice(0, 5);
+          const totalLoss = networkData.nodes.reduce((sum, n) => sum + estimateLoss(impactMap.get(n.id) ?? 0, n.market_cap), 0);
+          const maxImpact = ranked[0]?.impact ?? 1;
+          const visibleLog = propLog.slice(0, visibleLogIdx);
+
+          return (<>
+            <div className="rounded-xl border border-white/[0.06] bg-[rgba(8,8,12,0.82)] backdrop-blur-xl p-3.5">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[8px] uppercase tracking-[0.15em] text-white/25 font-semibold">Highest Risk</span>
+                <span className="text-[9px] font-mono text-red-400/70">{formatLoss(totalLoss)} total</span>
+              </div>
+              <div className="space-y-2">
+                {ranked.map((n, i) => (
+                  <div key={n.id} className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[9px] font-mono text-white/20 w-3">{i + 1}.</span>
+                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: SECTOR_COLORS[n.sector] ?? "#666" }} />
+                        <span className="text-[11px] font-bold text-white/90">{n.id}</span>
+                      </div>
+                      <span className="text-[10px] font-mono font-bold text-red-400">{formatLoss(n.loss)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1 rounded-full bg-white/[0.04] overflow-hidden">
+                        <div className="h-full rounded-full transition-all duration-500"
+                          style={{
+                            width: `${(n.impact / maxImpact) * 100}%`,
+                            background: n.impact > 0.5
+                              ? "linear-gradient(90deg, #f97316, #ef4444)"
+                              : n.impact > 0.2
+                                ? "linear-gradient(90deg, #eab308, #f97316)"
+                                : "linear-gradient(90deg, #22c55e, #eab308)",
+                          }} />
+                      </div>
+                      <span className="text-[9px] font-mono text-white/30 w-8 text-right">{(n.impact * 100).toFixed(0)}%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Propagation Log */}
+            <div className="rounded-xl border border-white/[0.06] bg-[rgba(8,8,12,0.82)] backdrop-blur-xl p-3.5">
+              <div className="flex items-center gap-1.5 mb-2.5">
+                <span className="text-[8px] uppercase tracking-[0.15em] text-white/25 font-semibold">Propagation Log</span>
+                {isAnimating && (
+                  <span className="relative flex h-1.5 w-1.5 ml-auto">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-red-500" />
+                  </span>
+                )}
+              </div>
+              <div className="max-h-[180px] overflow-y-auto no-scrollbar font-mono text-[9px] leading-[1.6] space-y-px">
+                {visibleLog.map((entry, i) => (
+                  <div key={i} className={`flex items-start gap-1 ${entry.from === "ORIGIN" ? "text-red-400/70" : "text-white/35"}`}>
+                    <span className="text-white/15 shrink-0 w-4">{entry.step}.</span>
+                    {entry.from === "ORIGIN" ? (
+                      <span><span className="text-red-400">{entry.to}</span> <span className="text-white/15">epicenter</span></span>
+                    ) : (
+                      <span>
+                        <span className="text-amber-400/60">{entry.from}</span>
+                        <span className="text-white/15"> → </span>
+                        <span className="text-white/50">{entry.to}</span>
+                        <span className="text-white/10"> ({(entry.impact * 100).toFixed(0)}%)</span>
+                      </span>
+                    )}
+                  </div>
+                ))}
+                {visibleLog.length === 0 && (
+                  <span className="text-white/15">Awaiting simulation...</span>
+                )}
+              </div>
+            </div>
+          </>);
+        })()}
+      </div>
 
       {/* ── Tooltip ────────────────────────────────────────────── */}
       {tooltip && (
@@ -572,6 +675,14 @@ export function ContagionNetwork() {
                 {((impactMap.get(tooltip.node.id) ?? 0) * 100).toFixed(1)}%
               </span>
             </div>
+            {(impactMap.get(tooltip.node.id) ?? 0) > 0 && (
+              <div className="flex justify-between pt-0.5 border-t border-white/[0.05]">
+                <span className="text-white/30">Est. Loss</span>
+                <span className="font-mono font-bold text-red-400">
+                  {formatLoss(estimateLoss(impactMap.get(tooltip.node.id) ?? 0, tooltip.node.market_cap))}
+                </span>
+              </div>
+            )}
           </div>
           {!isAnimating && (
             <div className="mt-2 pt-1.5 border-t border-white/[0.06] text-[9px] text-white/20">

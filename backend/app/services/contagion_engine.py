@@ -224,6 +224,7 @@ def get_full_network(
                 sector=company["sector"],
                 hq_lat=company["hq_lat"],
                 hq_lng=company["hq_lng"],
+                market_cap=company["market_cap"],
                 direct_exposure=sum(company["climate_exposure"].values()) / 5,
                 contagion_score=round(score, 4),
                 risk_level=risk_level,

@@ -4,6 +4,7 @@ export interface ContagionNode {
   sector: string;
   hq_lat: number;
   hq_lng: number;
+  market_cap: number;
   x?: number;
   y?: number;
   fx?: number | null;
